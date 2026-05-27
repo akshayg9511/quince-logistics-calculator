@@ -2,9 +2,10 @@
 // app.js — Quince Logistics Calculator portal
 // ============================================================
 //
-// Flow: file drop → parse xlsx → validate headers → validate COO →
-// compute Ocean/Air per row → build output xlsx (input + 2 cols with
-// freeze pane) → trigger download. All client-side via SheetJS.
+// Flow: file drop → parse xlsx → detect header row (1-5) → loop rows →
+// compute Ocean/Air or write a Notes message → build output xlsx
+// (header + data + 3 appended columns) → trigger download.
+// All client-side via SheetJS.
 
 const REQUIRED_HEADERS = [
   'Length (in)',
@@ -14,8 +15,11 @@ const REQUIRED_HEADERS = [
   'COO'
 ];
 
+const MAX_HEADER_SEARCH_ROW = 5;
+
 const OUTPUT_HEADER_OCEAN = 'Logistics Cost Ocean ($/unit)';
 const OUTPUT_HEADER_AIR   = 'Logistics Cost Air ($/unit)';
+const OUTPUT_HEADER_NOTES = 'Notes';
 
 // ---------------------------------------------------------------------------
 // UI hookup
@@ -83,6 +87,21 @@ function showError(msg) {
 }
 
 // ---------------------------------------------------------------------------
+// Header detection — scan first MAX_HEADER_SEARCH_ROW rows for one that
+// contains every required header name.
+// ---------------------------------------------------------------------------
+function findHeaderRow(rows) {
+  const requiredLower = REQUIRED_HEADERS.map(h => h.toLowerCase());
+  const searchLimit = Math.min(MAX_HEADER_SEARCH_ROW, rows.length);
+  for (let r = 0; r < searchLimit; r++) {
+    const cells = (rows[r] || []).map(c => String(c == null ? '' : c).trim().toLowerCase());
+    const cellSet = new Set(cells);
+    if (requiredLower.every(h => cellSet.has(h))) return r;
+  }
+  return -1;
+}
+
+// ---------------------------------------------------------------------------
 // File handler
 // ---------------------------------------------------------------------------
 async function handleFile(file) {
@@ -111,128 +130,144 @@ async function handleFile(file) {
   // Convert to 2D array (header: 1 means raw rows, no key conversion).
   const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: true });
   if (rows.length < 2) {
-    showError('File has no data rows. Expected a header row plus at least one data row.');
+    showError('File is empty or has no data rows. Expected a header row plus at least one data row.');
     return;
   }
 
-  const headerRow = rows[0].map(c => String(c == null ? '' : c).trim());
-  const dataRows  = rows.slice(1);
-
-  // ----- Validate required headers (case-insensitive trim) ---------------
-  const headerIndex = {};   // normalizedLowerHeader → column index
-  headerRow.forEach((h, i) => {
-    if (h) headerIndex[h.toLowerCase()] = i;
-  });
-
-  const missingHeaders = [];
-  const colByField = {};   // field → column index
-  REQUIRED_HEADERS.forEach((h) => {
-    const idx = headerIndex[h.toLowerCase()];
-    if (idx === undefined) missingHeaders.push(h);
-    else colByField[h] = idx;
-  });
-  if (missingHeaders.length > 0) {
+  // ----- Find header row in rows 1..MAX_HEADER_SEARCH_ROW ---------------
+  const headerRowIdx = findHeaderRow(rows);
+  if (headerRowIdx === -1) {
     showError(
-      `Required column${missingHeaders.length > 1 ? 's' : ''} not found in your file: ` +
-      missingHeaders.map(h => `"${h}"`).join(', ') +
-      `.\n\nPlease add ${missingHeaders.length > 1 ? 'columns' : 'a column'} with ` +
-      `the exact header name${missingHeaders.length > 1 ? 's' : ''} above and re-upload.`
+      `Could not find the required column headers ` +
+      REQUIRED_HEADERS.map(h => `"${h}"`).join(', ') +
+      ` in rows 1–${MAX_HEADER_SEARCH_ROW} of your file. ` +
+      `Please make sure these exact column names appear in one of the first ${MAX_HEADER_SEARCH_ROW} rows, then re-upload.`
     );
     return;
   }
 
-  // ----- Validate per-row data + compute ---------------------------------
-  showStatus(`Computing ${dataRows.length} rows…`, 'busy');
+  const headerRow = rows[headerRowIdx].map(c => String(c == null ? '' : c).trim());
+  const dataRows  = rows.slice(headerRowIdx + 1);
 
-  const computeResults = []; // parallel array: {ocean, air} or null when blank row
+  // Build the column-index lookup for required fields.
+  const headerIndex = {};   // lowercase-trimmed header → column index
+  headerRow.forEach((h, i) => {
+    if (h) headerIndex[h.toLowerCase()] = i;
+  });
+  const colByField = {};
+  REQUIRED_HEADERS.forEach((h) => { colByField[h] = headerIndex[h.toLowerCase()]; });
+
+  // ----- Per-row compute -----------------------------------------------
+  showStatus(`Computing ${dataRows.length.toLocaleString()} rows…`, 'busy');
+
+  // computeResults[i] = { ocean, air, note }  (ocean/air may be null on bad row)
+  const computeResults = [];
+  let okCount = 0;
+  let issueCount = 0;
+  let blankCount = 0;
 
   for (let i = 0; i < dataRows.length; i++) {
     const row = dataRows[i];
-    const userRowNumber = i + 2;  // +1 for header, +1 for 1-based row number
 
-    const rawL = row[colByField['Length (in)']];
-    const rawW = row[colByField['Width (in)']];
-    const rawH = row[colByField['Height (in)']];
+    const rawL  = row[colByField['Length (in)']];
+    const rawW  = row[colByField['Width (in)']];
+    const rawH  = row[colByField['Height (in)']];
     const rawWt = row[colByField['Weight (g)']];
     const rawCoo = row[colByField['COO']];
 
-    // Detect fully-blank row → skip silently, write blank output.
-    if (rawL === '' && rawW === '' && rawH === '' && rawWt === '' && rawCoo === '') {
-      computeResults.push(null);
+    // Fully-blank row → preserve in output, no Note (silent skip).
+    if ((rawL === '' || rawL == null) &&
+        (rawW === '' || rawW == null) &&
+        (rawH === '' || rawH == null) &&
+        (rawWt === '' || rawWt == null) &&
+        (rawCoo === '' || rawCoo == null)) {
+      computeResults.push({ ocean: null, air: null, note: '' });
+      blankCount++;
       continue;
     }
 
-    // Validate numerics
-    const l = Number(rawL);
-    const w = Number(rawW);
-    const h = Number(rawH);
-    const wt = Number(rawWt);
-    if (!isFinite(l) || l <= 0) {
-      showError(`Row ${userRowNumber}: "Length (in)" must be a positive number. Got "${rawL}".`);
-      return;
-    }
-    if (!isFinite(w) || w <= 0) {
-      showError(`Row ${userRowNumber}: "Width (in)" must be a positive number. Got "${rawW}".`);
-      return;
-    }
-    if (!isFinite(h) || h <= 0) {
-      showError(`Row ${userRowNumber}: "Height (in)" must be a positive number. Got "${rawH}".`);
-      return;
-    }
-    if (!isFinite(wt) || wt <= 0) {
-      showError(`Row ${userRowNumber}: "Weight (g)" must be a positive number. Got "${rawWt}".`);
-      return;
+    // Validate each numeric input. Collect problems instead of aborting.
+    const problems = [];
+    const numericChecks = [
+      ['Length (in)', rawL],
+      ['Width (in)',  rawW],
+      ['Height (in)', rawH],
+      ['Weight (g)',  rawWt]
+    ];
+    const numericValues = {};
+    for (const [field, raw] of numericChecks) {
+      if (raw === '' || raw == null) {
+        problems.push(`${field} is empty`);
+        numericValues[field] = NaN;
+        continue;
+      }
+      const n = Number(raw);
+      if (!isFinite(n)) {
+        problems.push(`${field} is not a number (got "${raw}")`);
+        numericValues[field] = NaN;
+      } else if (n <= 0) {
+        problems.push(`${field} is ${n}`);
+        numericValues[field] = n;
+      } else {
+        numericValues[field] = n;
+      }
     }
 
-    // Validate COO
+    // Validate COO.
+    let cooCode = null;
     if (rawCoo === null || rawCoo === undefined || String(rawCoo).trim() === '') {
-      showError(`Row ${userRowNumber}: "COO" is empty. Accepted formats: ISO code (e.g. "IN"), full name (e.g. "India"), or combined ("India | IN").`);
-      return;
-    }
-    const cooCode = normalizeCOO(rawCoo);
-    if (!cooCode) {
-      showError(
-        `Row ${userRowNumber}: COO value "${rawCoo}" not recognized.\n\n` +
-        `Accepted formats:\n` +
-        `  • 2-letter ISO code (e.g. "IN", "CN", "VN")\n` +
-        `  • Full country name (e.g. "India", "China")\n` +
-        `  • Combined ("India | IN")`
-      );
-      return;
+      problems.push('COO is empty');
+    } else {
+      cooCode = normalizeCOO(rawCoo);
+      if (!cooCode) {
+        problems.push(`COO "${rawCoo}" not recognized`);
+      }
     }
 
-    const result = computeLogistics(wt, l, w, h, cooCode);
-    computeResults.push(result);
+    if (problems.length > 0) {
+      computeResults.push({ ocean: null, air: null, note: problems.join('; ') });
+      issueCount++;
+      continue;
+    }
+
+    // Compute.
+    const r = computeLogistics(
+      numericValues['Weight (g)'],
+      numericValues['Length (in)'],
+      numericValues['Width (in)'],
+      numericValues['Height (in)'],
+      cooCode
+    );
+    computeResults.push({ ocean: r.ocean, air: r.air, note: '' });
+    okCount++;
   }
 
   // ----- Build output workbook ------------------------------------------
   showStatus('Building output file…', 'busy');
 
-  // Output is input row data + 2 appended columns.
-  const outputHeader = headerRow.concat([OUTPUT_HEADER_OCEAN, OUTPUT_HEADER_AIR]);
+  const outputHeader = headerRow.concat([OUTPUT_HEADER_OCEAN, OUTPUT_HEADER_AIR, OUTPUT_HEADER_NOTES]);
   const outputRows = [outputHeader];
 
   for (let i = 0; i < dataRows.length; i++) {
     const row = dataRows[i];
-    // Ensure row has at least as many columns as the header (some xlsx
-    // libraries truncate trailing blanks).
     while (row.length < headerRow.length) row.push('');
     const res = computeResults[i];
-    if (res === null) {
-      outputRows.push(row.concat(['', '']));
+    if (res.ocean === null && res.air === null) {
+      // Blank or invalid row.
+      outputRows.push(row.concat(['', '', res.note || '']));
     } else {
-      // Round to 4 decimals — matches Python CSV precision.
       outputRows.push(row.concat([
         Math.round(res.ocean * 10000) / 10000,
-        Math.round(res.air * 10000) / 10000
+        Math.round(res.air * 10000) / 10000,
+        ''   // empty Notes for clean rows
       ]));
     }
   }
 
   const outputSheet = XLSX.utils.aoa_to_sheet(outputRows);
 
-  // Apply $#,##0.00 number format to the two output columns.
-  const oceanColIndex = headerRow.length;       // 0-based after input
+  // Apply $#,##0.00 number format to the two numeric output columns.
+  const oceanColIndex = headerRow.length;
   const airColIndex   = headerRow.length + 1;
   const oceanColLetter = XLSX.utils.encode_col(oceanColIndex);
   const airColLetter   = XLSX.utils.encode_col(airColIndex);
@@ -243,31 +278,41 @@ async function handleFile(file) {
     if (airCell   && typeof airCell.v === 'number')   airCell.z = '"$"#,##0.00';
   }
 
-  // Set column widths roughly based on header length.
-  outputSheet['!cols'] = outputHeader.map((h) => ({ wch: Math.max(12, String(h).length + 2) }));
+  // Column widths roughly based on header length; Notes a bit wider.
+  outputSheet['!cols'] = outputHeader.map((h) => ({
+    wch: h === OUTPUT_HEADER_NOTES ? 40 : Math.max(12, String(h).length + 2)
+  }));
 
-  // Assemble workbook
+  // Assemble workbook + write.
   const outputWb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(outputWb, outputSheet, sheetName.substring(0, 31) || 'Logistics');
-
-  // Write to binary array
   const wbout = XLSX.write(outputWb, { bookType: 'xlsx', type: 'array' });
   computedBlob = new Blob([wbout], { type: 'application/octet-stream' });
 
-  // Filename: logistics_<original>_<ts>.xlsx
+  // Filename.
   const baseName = file.name.replace(/\.(xlsx|xls)$/i, '');
   const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
   computedFileName = `${baseName}__logistics_${ts}.xlsx`;
 
   const elapsedMs = Math.round(performance.now() - t0);
-  const nonBlankCount = computeResults.filter(r => r !== null).length;
+  const totalRows = okCount + issueCount + blankCount;
 
   showStatus('', 'ok');
   statusEl.classList.add('hidden');
   resultEl.classList.remove('hidden');
+
+  const issueSentence = issueCount > 0
+    ? ` <strong>${issueCount.toLocaleString()}</strong> row${issueCount === 1 ? '' : 's'} had issues — see the <code>Notes</code> column for details.`
+    : '';
+  const blankNote = blankCount > 0
+    ? ` (${blankCount.toLocaleString()} blank row${blankCount === 1 ? '' : 's'} preserved.)`
+    : '';
+
   resultSummary.innerHTML =
-    `Computed <strong>${nonBlankCount.toLocaleString()}</strong> row${nonBlankCount === 1 ? '' : 's'} ` +
-    `in <strong>${elapsedMs.toLocaleString()} ms</strong>. ` +
-    `Output preserves your input columns and appends ` +
-    `<code>${OUTPUT_HEADER_OCEAN}</code> + <code>${OUTPUT_HEADER_AIR}</code>.`;
+    `Computed <strong>${okCount.toLocaleString()} of ${totalRows.toLocaleString()}</strong> rows ` +
+    `in <strong>${elapsedMs.toLocaleString()} ms</strong>.` +
+    issueSentence +
+    blankNote +
+    ` Output contains your input columns plus <code>${OUTPUT_HEADER_OCEAN}</code>, ` +
+    `<code>${OUTPUT_HEADER_AIR}</code>, and <code>${OUTPUT_HEADER_NOTES}</code>.`;
 }

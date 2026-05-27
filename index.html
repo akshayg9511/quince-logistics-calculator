@@ -20,16 +20,21 @@
     <section class="requirements">
       <h2>Input requirements</h2>
       <p>Your file must contain these <strong>exact</strong> column headers
-      (case-insensitive):</p>
+      (case-insensitive) somewhere in <strong>rows 1&ndash;5</strong>:</p>
       <ul>
         <li><code>Length (in)</code></li>
         <li><code>Width (in)</code></li>
         <li><code>Height (in)</code></li>
         <li><code>Weight (g)</code></li>
         <li><code>COO</code> &mdash; accepts <code>IN</code>,
-          <code>India</code>, or <code>India | IN</code></li>
+          <code>India</code>, <code>India | IN</code>, or
+          <code>System default (India)</code></li>
       </ul>
-      <p>Extra columns are preserved untouched in the output.</p>
+      <p>Rows above the header (banner, labels, instructions) are dropped
+      from the output. Data is everything below the header row.</p>
+      <p>Rows with missing or invalid values are kept in the output with
+      blank Ocean/Air and an explanation in a new <code>Notes</code>
+      column &mdash; no row blocks the rest of the file.</p>
     </section>
 
     <section id="drop-zone" class="drop-zone">

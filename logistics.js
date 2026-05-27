@@ -101,10 +101,21 @@ const VALID_COO_CODES = (function () {
 //   - 2-letter ISO code: 'IN', 'CN', 'VN'
 //   - Full country name: 'India', 'Viet Nam'
 //   - Combined: 'India | IN'
+//   - "System default (Country)" — the Bid Inputs dropdown's default option;
+//     extract the parenthesized country and resolve via the lookups above.
 function normalizeCOO(raw) {
   if (raw === null || raw === undefined) return null;
   const s = String(raw).trim();
   if (!s) return null;
+
+  // Phase 7.1: "System default (Country)" → extract country inside parens.
+  // Only triggers when the string starts with "System default" — narrow rule
+  // to avoid mis-parsing arbitrary "Vendor (India)" values.
+  if (/^system\s+default\b/i.test(s)) {
+    const m = s.match(/\(([^)]+)\)/);
+    if (!m) return null;   // bare "System default" with no parens can't be resolved
+    return normalizeCOO(m[1].trim());
+  }
 
   // Combined "Name | XX" — take part after |
   if (s.indexOf('|') >= 0) {
