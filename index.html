@@ -57,8 +57,10 @@
     </footer>
   </main>
 
-  <!-- SheetJS Community Edition for xlsx parsing + writing -->
-  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <!-- xlsx-js-style: SheetJS Community fork with cell-style write support
+       (needed for the light-green highlight on output columns). Drop-in
+       compatible — exposes the same global `XLSX`. -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
   <script src="logistics.js"></script>
   <script src="app.js"></script>
 </body>

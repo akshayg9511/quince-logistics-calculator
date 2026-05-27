@@ -266,14 +266,44 @@ async function handleFile(file) {
 
   const outputSheet = XLSX.utils.aoa_to_sheet(outputRows);
 
-  // Apply $#,##0.00 number format to the two numeric output columns.
+  // Column indices for the three output columns we appended.
   const oceanColIndex = headerRow.length;
   const airColIndex   = headerRow.length + 1;
+  const notesColIndex = headerRow.length + 2;
   const oceanColLetter = XLSX.utils.encode_col(oceanColIndex);
   const airColLetter   = XLSX.utils.encode_col(airColIndex);
+  const notesColLetter = XLSX.utils.encode_col(notesColIndex);
+
+  // Cell styles: darker green for the output header row, light green for
+  // every data cell in the three appended output columns. xlsx-js-style
+  // honors these on write; viewers (Excel, Google Sheets, Numbers) render
+  // the fill correctly.
+  const HEADER_FILL = { patternType: 'solid', fgColor: { rgb: 'A9D08E' } };
+  const DATA_FILL   = { patternType: 'solid', fgColor: { rgb: 'E2EFDA' } };
+  const HEADER_FONT = { bold: true };
+
+  // Style the header cells (row 1 = output row index 0).
+  [oceanColLetter, airColLetter, notesColLetter].forEach((letter) => {
+    const ref = letter + '1';
+    if (outputSheet[ref]) {
+      outputSheet[ref].s = { fill: HEADER_FILL, font: HEADER_FONT };
+    }
+  });
+
+  // Style every data cell in the three output columns. Apply $#,##0.00
+  // number format to the two numeric columns at the same time.
   for (let r = 1; r < outputRows.length; r++) {
-    const oceanCell = outputSheet[oceanColLetter + (r + 1)];
-    const airCell   = outputSheet[airColLetter + (r + 1)];
+    const xlsxRowNum = r + 1;
+    [oceanColLetter, airColLetter, notesColLetter].forEach((letter) => {
+      const ref = letter + xlsxRowNum;
+      // Ensure the cell exists even if blank (so the fill renders).
+      if (!outputSheet[ref]) {
+        outputSheet[ref] = { t: 's', v: '' };
+      }
+      outputSheet[ref].s = { fill: DATA_FILL };
+    });
+    const oceanCell = outputSheet[oceanColLetter + xlsxRowNum];
+    const airCell   = outputSheet[airColLetter + xlsxRowNum];
     if (oceanCell && typeof oceanCell.v === 'number') oceanCell.z = '"$"#,##0.00';
     if (airCell   && typeof airCell.v === 'number')   airCell.z = '"$"#,##0.00';
   }
