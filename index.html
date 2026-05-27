@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Quince Logistics Calculator</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Quince Logistics Calculator</h1>
+      <p class="lede">
+        Upload an Excel file. We compute <strong>Logistics Cost Ocean</strong>
+        and <strong>Logistics Cost Air</strong> per row and return an Excel
+        with two extra columns appended. Row order preserved.
+      </p>
+    </header>
+
+    <section class="requirements">
+      <h2>Input requirements</h2>
+      <p>Your file must contain these <strong>exact</strong> column headers
+      (case-insensitive):</p>
+      <ul>
+        <li><code>Length (in)</code></li>
+        <li><code>Width (in)</code></li>
+        <li><code>Height (in)</code></li>
+        <li><code>Weight (g)</code></li>
+        <li><code>COO</code> &mdash; accepts <code>IN</code>,
+          <code>India</code>, or <code>India | IN</code></li>
+      </ul>
+      <p>Extra columns are preserved untouched in the output.</p>
+    </section>
+
+    <section id="drop-zone" class="drop-zone">
+      <input type="file" id="file-input" accept=".xlsx,.xls" hidden>
+      <p class="drop-label">Drop your .xlsx file here<br>or
+        <button type="button" id="browse-btn">browse</button></p>
+    </section>
+
+    <section id="status" class="status hidden"></section>
+
+    <section id="result" class="result hidden">
+      <h2>Done</h2>
+      <p id="result-summary"></p>
+      <button type="button" id="download-btn" class="primary">Download Excel</button>
+      <button type="button" id="reset-btn" class="ghost">Compute another file</button>
+    </section>
+
+    <footer>
+      <p>Compute runs entirely in your browser. Nothing is uploaded to a server.</p>
+    </footer>
+  </main>
+
+  <!-- SheetJS Community Edition for xlsx parsing + writing -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="logistics.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
